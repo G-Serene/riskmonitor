@@ -68,11 +68,11 @@ def get_model_name() -> str:
     
     if provider == 'azure':
         # For Azure, use the deployment name
-        deployment_name = os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4o')
+        deployment_name = os.getenv('AZURE_OPENAI_DEPLOYMENT_NAME', 'gpt-4.1')
         return deployment_name
     else:
         # For OpenAI, use the model name directly
-        model_name = os.getenv('LLM_MODEL', 'gpt-4o')
+        model_name = os.getenv('LLM_MODEL', 'gpt-4.1')
         return model_name
 
 
@@ -248,69 +248,93 @@ def validate_risk_analysis(analysis: Dict[str, Any]) -> Dict[str, Any]:
         primary_category = analysis['primary_risk_category']
         
         # If multiple categories are provided (separated by |), take the first one and move others to secondary
-        if '|' in primary_category:
-            categories = [cat.strip() for cat in primary_category.split('|')]
-            primary_category = categories[0]
-            print(f"Multiple risk categories detected in primary field: {analysis['primary_risk_category']}. Using primary: {primary_category}")
-            analysis['primary_risk_category'] = primary_category
+        if '|' in primary_category or ' and ' in primary_category:
+            # Split on various separators
+            parts = re.split(r'\s*[|&,]\s*|\s+and\s+', primary_category.lower())
+            primary_category = parts[0].strip().replace(' ', '_')
             
-            # Add the additional categories to secondary categories
+            # Move additional categories to secondary if not already there
             if 'secondary_risk_categories' not in analysis:
                 analysis['secondary_risk_categories'] = []
-            analysis['secondary_risk_categories'].extend([cat for cat in categories[1:] if cat not in analysis['secondary_risk_categories']])
+            
+            for part in parts[1:]:
+                clean_part = part.strip().replace(' ', '_')
+                if clean_part in valid_categories and clean_part not in analysis['secondary_risk_categories']:
+                    analysis['secondary_risk_categories'].append(clean_part)
         
-        # Validate the primary category
-        if analysis['primary_risk_category'] not in valid_categories:
-            raise ValueError(f"Invalid primary risk category: {analysis['primary_risk_category']}")
+        # Normalize the primary category
+        primary_category = primary_category.lower().replace(' ', '_').replace('-', '_')
         
-        # Validate secondary risk categories if present
+        if primary_category not in valid_categories:
+            print(f"⚠️ Warning: Invalid primary risk category '{primary_category}', defaulting to 'market_risk'")
+            analysis['primary_risk_category'] = 'market_risk'
+        else:
+            analysis['primary_risk_category'] = primary_category
+        
+        # Validate secondary categories
         if 'secondary_risk_categories' in analysis:
-            for secondary_cat in analysis['secondary_risk_categories']:
-                if secondary_cat not in valid_categories:
-                    print(f"Warning: Invalid secondary risk category: {secondary_cat}")
-                    # Remove invalid categories
-                    analysis['secondary_risk_categories'] = [cat for cat in analysis['secondary_risk_categories'] if cat in valid_categories]
+            valid_secondary = []
+            for cat in analysis['secondary_risk_categories']:
+                normalized_cat = cat.lower().replace(' ', '_').replace('-', '_')
+                if normalized_cat in valid_categories and normalized_cat != analysis['primary_risk_category']:
+                    valid_secondary.append(normalized_cat)
+            analysis['secondary_risk_categories'] = valid_secondary
         
-        # Ensure numeric fields are within valid ranges
-        if not (0 <= analysis.get('confidence_score', 0) <= 100):
-            analysis['confidence_score'] = max(0, min(100, analysis.get('confidence_score', 50)))
+        # Validate confidence score
+        if 'confidence_score' in analysis:
+            try:
+                confidence = float(analysis['confidence_score'])
+                if confidence < 0 or confidence > 100:
+                    print(f"⚠️ Warning: Confidence score {confidence} out of range, clamping to 0-100")
+                    confidence = max(0, min(100, confidence))
+                analysis['confidence_score'] = int(confidence)
+            except (ValueError, TypeError):
+                print(f"⚠️ Warning: Invalid confidence score '{analysis['confidence_score']}', defaulting to 50")
+                analysis['confidence_score'] = 50
         
-        if not (0 <= analysis.get('impact_score', 0) <= 100):
-            analysis['impact_score'] = max(0, min(100, analysis.get('impact_score', 50)))
+        # Validate impact score
+        if 'impact_score' in analysis:
+            try:
+                impact = float(analysis['impact_score'])
+                if impact < 0 or impact > 100:
+                    print(f"⚠️ Warning: Impact score {impact} out of range, clamping to 0-100")
+                    impact = max(0, min(100, impact))
+                analysis['impact_score'] = int(impact)
+            except (ValueError, TypeError):
+                print(f"⚠️ Warning: Invalid impact score '{analysis['impact_score']}', defaulting to 50")
+                analysis['impact_score'] = 50
         
-        # Ensure sentiment score is between -1 and 1
-        sentiment = analysis.get('sentiment_score', 0.0)
-        if not (-1.0 <= sentiment <= 1.0):
-            analysis['sentiment_score'] = max(-1.0, min(1.0, sentiment))
+        # Validate sentiment score
+        if 'sentiment_score' in analysis:
+            try:
+                sentiment = float(analysis['sentiment_score'])
+                if sentiment < -1 or sentiment > 1:
+                    print(f"⚠️ Warning: Sentiment score {sentiment} out of range, clamping to -1 to 1")
+                    sentiment = max(-1, min(1, sentiment))
+                analysis['sentiment_score'] = round(sentiment, 3)
+            except (ValueError, TypeError):
+                print(f"⚠️ Warning: Invalid sentiment score '{analysis['sentiment_score']}', defaulting to 0")
+                analysis['sentiment_score'] = 0.0
         
-        # Set defaults for optional fields
-        defaults = {
-            'secondary_risk_categories': [],
-            'risk_subcategories': [],
-            'urgency_level': 'Medium',
-            'temporal_impact': 'Medium-term',
-            'geographic_regions': [],
-            'industry_sectors': ['financial_services'],
-            'countries': [],
-            'affected_markets': [],
-            'keywords': [],
-            'entities': [],
-            'is_market_moving': False,
-            'is_breaking_news': False,
-            'is_regulatory': False,
-            'requires_action': False,
-            'financial_exposure': 0,
-            'risk_contribution': 0.0
-        }
+        # Ensure boolean fields are actually boolean
+        boolean_fields = ['is_market_moving', 'is_breaking_news', 'is_regulatory', 'requires_action']
+        for field in boolean_fields:
+            if field in analysis:
+                if isinstance(analysis[field], str):
+                    analysis[field] = analysis[field].lower() in ['true', 'yes', '1']
+                else:
+                    analysis[field] = bool(analysis[field])
         
-        for key, default_value in defaults.items():
-            if key not in analysis:
-                analysis[key] = default_value
-        
-        # Backward compatibility: if risk_category exists instead of primary_risk_category
-        if 'risk_category' in analysis and 'primary_risk_category' not in analysis:
-            analysis['primary_risk_category'] = analysis['risk_category']
-            print("Converted legacy 'risk_category' field to 'primary_risk_category'")
+        # Ensure list fields are actually lists
+        list_fields = ['secondary_risk_categories', 'risk_subcategories', 'geographic_regions', 
+                      'industry_sectors', 'countries', 'affected_markets', 'keywords', 'entities']
+        for field in list_fields:
+            if field in analysis and not isinstance(analysis[field], list):
+                if isinstance(analysis[field], str):
+                    # Try to parse as comma-separated values
+                    analysis[field] = [item.strip() for item in analysis[field].split(',') if item.strip()]
+                else:
+                    analysis[field] = []
         
         return analysis
         
