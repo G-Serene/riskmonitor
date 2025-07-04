@@ -199,289 +199,257 @@ FINANCIAL_RISK_THEMES = {
             "carbon_pricing_shock",
             "green_finance_disruption"
         ]
-    },
-    
-    "systemic_banking_crisis": {
-        "display_name": "Systemic Banking Crisis",
-        "description": "Bank failures, contagion risk, and systemic financial instability", 
-        "keywords": ["bank failure", "contagion", "systemic", "bailout", "fdic", "collapse"],
-        "sub_themes": [
-            "regional_bank_collapse",
-            "too_big_to_fail_crisis",
-            "deposit_insurance_strain",
-            "interbank_contagion",
-            "shadow_banking_crisis"
-        ]
-    },
-    
-    "other_financial_risks": {
-        "display_name": "Other Financial Risks",
-        "description": "Miscellaneous financial risks that don't fit specific categories",
-        "keywords": [],  # No specific keywords - catch-all category
-        "sub_themes": [
-            "unclassified_financial_risk",
-            "emerging_risk_patterns",
-            "miscellaneous_banking_issues",
-            "novel_financial_disruptions",
-            "undefined_risk_events"
-        ]
     }
+}
+
+# Default theme for unclassifiable news
+DEFAULT_THEME = {
+    "primary_theme": "market_volatility",
+    "theme_display_name": "Market Volatility Surge",
+    "confidence": 30,
+    "matched_keywords": []
 }
 
 def classify_news_theme(headline, content, risk_categories=None):
     """
-    Classify news into financial risk themes using LLM-based analysis.
+    Classify financial news into risk themes using GPT-4.1
+    Uses LLM for nuanced understanding of financial context.
     
     Args:
         headline (str): News headline
-        content (str): News content 
-        risk_categories (list): Already identified risk categories (optional)
+        content (str): News content (truncated to 2000 chars)
+        risk_categories (list): Detected risk categories for context
         
     Returns:
-        dict: Theme classification result
+        dict: {
+            'primary_theme': theme_id,
+            'theme_display_name': display_name,
+            'confidence': confidence_score (0-100),
+            'matched_keywords': list_of_keywords
+        }
     """
+    from util import llm_call
+    
     try:
-        # Import LLM utility
-        from util import llm_call
+        # Truncate content for LLM efficiency
+        truncated_content = content[:2000] if content else ""
         
-        # Build theme options for LLM
+        # Build context from risk categories
+        risk_context = ""
+        if risk_categories:
+            risk_context = f"\nDetected Risk Categories: {', '.join(risk_categories)}"
+        
+        # Create theme options summary for the LLM
         theme_options = []
-        for theme_id, theme_info in FINANCIAL_RISK_THEMES.items():
-            theme_options.append(f"- {theme_id}: {theme_info['display_name']} - {theme_info['description']}")
+        for theme_id, theme_data in FINANCIAL_RISK_THEMES.items():
+            theme_options.append(f"- {theme_id}: {theme_data['display_name']} - {theme_data['description']}")
         
-        # Create LLM prompt for theme classification
-        prompt = f"""You are a financial risk analyst tasked with classifying news into specific financial risk themes.
+        theme_options_text = "\n".join(theme_options)
+        
+        messages = [
+            {
+                "role": "system",
+                "content": """You are a financial risk analyst specializing in theme classification for banking risk monitoring. 
+                Your task is to classify news articles into the most appropriate financial risk theme.
+                
+                Return your response in this format:
+                Theme: [theme_id]
+                Display: [theme_display_name]  
+                Confidence: [0-100]
+                Keywords: [comma-separated list of matched keywords]
+                Reasoning: [brief explanation]"""
+            },
+            {
+                "role": "user", 
+                "content": f"""Classify this financial news into the most appropriate theme:
+
+HEADLINE: {headline}
+CONTENT: {truncated_content}
+{risk_context}
 
 AVAILABLE THEMES:
-{chr(10).join(theme_options)}
+{theme_options_text}
 
-NEWS TO CLASSIFY:
-Headline: {headline}
-Content: {content[:1000]}...
-
-TASK:
-Analyze this news article and classify it into ONE of the available themes above. Consider:
-1. The primary financial risk being discussed
-2. The main impact on banking/financial sector
-3. The core nature of the risk event
-
-Return your response in this exact JSON format:
-{{
-    "primary_theme": "theme_id_here",
-    "confidence": 85,
-    "reasoning": "Brief explanation of why this theme was chosen"
-}}
-
-Choose the theme that BEST matches the primary financial risk in this news. If none fit perfectly, choose "other_financial_risks"."""
-
-        # Call LLM for classification
-        response = llm_call(
-            messages=[{"role": "user", "content": prompt}],
-            model="gpt-4o-mini",
-            temperature=0.1
-        )
-        
-        # Parse LLM response
-        import json
-        import re
-        
-        # Extract JSON from response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            llm_result = json.loads(json_match.group())
-            
-            theme_id = llm_result.get("primary_theme", "other_financial_risks")
-            confidence = llm_result.get("confidence", 70)
-            reasoning = llm_result.get("reasoning", "LLM classification")
-            
-            # Validate theme exists
-            if theme_id not in FINANCIAL_RISK_THEMES:
-                theme_id = "other_financial_risks"
-                confidence = 30
-                reasoning = "Invalid theme returned, using fallback"
-            
-            return {
-                "primary_theme": theme_id,
-                "theme_display_name": FINANCIAL_RISK_THEMES[theme_id]["display_name"],
-                "confidence": min(max(confidence, 1), 100),  # Ensure 1-100 range
-                "reasoning": reasoning,
-                "method": "llm_classification"
+Choose the theme that best matches the primary financial risk described in this news. 
+Consider the main impact on banking/financial systems.
+Provide confidence score based on how clearly the news fits the theme.
+List keywords from the news that match the theme's focus areas."""
             }
-        else:
-            raise ValueError("Invalid JSON response from LLM")
-            
+        ]
+        
+        # Use util.py llm_call (which handles environment variables automatically)
+        response = llm_call(messages, temperature=0.1)
+        
+        # Parse the response
+        result = {}
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            if line.startswith('Theme:'):
+                result['primary_theme'] = line.split(':', 1)[1].strip()
+            elif line.startswith('Display:'):
+                result['theme_display_name'] = line.split(':', 1)[1].strip()
+            elif line.startswith('Confidence:'):
+                try:
+                    result['confidence'] = int(line.split(':', 1)[1].strip())
+                except:
+                    result['confidence'] = 50
+            elif line.startswith('Keywords:'):
+                keywords_text = line.split(':', 1)[1].strip()
+                result['matched_keywords'] = [k.strip() for k in keywords_text.split(',') if k.strip()]
+        
+        # Validate theme exists
+        if result.get('primary_theme') not in FINANCIAL_RISK_THEMES:
+            print(f"⚠️ LLM returned invalid theme '{result.get('primary_theme')}', using fallback")
+            return classify_news_theme_fallback(headline, content, risk_categories)
+        
+        # Ensure all required fields are present
+        theme_data = FINANCIAL_RISK_THEMES[result['primary_theme']]
+        result['theme_display_name'] = result.get('theme_display_name', theme_data['display_name'])
+        result['confidence'] = result.get('confidence', 50)
+        result['matched_keywords'] = result.get('matched_keywords', [])
+        
+        print(f"🎯 Theme Classification: {result['theme_display_name']} ({result['confidence']}% confidence)")
+        return result
+        
     except Exception as e:
-        print(f"⚠️ LLM theme classification failed: {e}")
-        # Fallback to keyword matching
+        print(f"❌ LLM theme classification failed: {e}")
+        print("🔄 Falling back to keyword matching")
         return classify_news_theme_fallback(headline, content, risk_categories)
+
 
 def classify_news_theme_fallback(headline, content, risk_categories=None):
     """
-    Fallback theme classification using keyword matching when LLM fails.
+    Fallback theme classification using keyword matching.
+    Used when LLM classification fails.
     """
-    text = f"{headline} {content}".lower()
-    
-    # Score each theme based on keyword matches
-    theme_scores = {}
-    for theme_id, theme_info in FINANCIAL_RISK_THEMES.items():
-        score = 0
-        matched_keywords = []
+    try:
+        # Combine headline and content for analysis
+        full_text = f"{headline} {content}".lower()
         
-        for keyword in theme_info["keywords"]:
-            if keyword.lower() in text:
-                score += 1
-                matched_keywords.append(keyword)
+        # Score each theme based on keyword matches
+        theme_scores = {}
         
-        if score > 0:
-            theme_scores[theme_id] = {
-                "score": score,
-                "matched_keywords": matched_keywords,
-                "display_name": theme_info["display_name"],
-                "description": theme_info["description"]
-            }
-    
-    # Sort by score and return top match
-    if theme_scores:
-        best_theme = max(theme_scores.items(), key=lambda x: x[1]["score"])
-        return {
-            "primary_theme": best_theme[0],
-            "theme_display_name": best_theme[1]["display_name"],
-            "confidence": min(best_theme[1]["score"] * 20, 100),  # Max 100%
-            "matched_keywords": best_theme[1]["matched_keywords"],
-            "method": "keyword_fallback"
-        }
-    
-    # Fallback to risk category mapping if no keywords match
-    if risk_categories:
-        risk_to_theme_map = {
-            "credit_risk": "credit_crisis",
-            "market_risk": "market_volatility", 
-            "currency_risk": "currency_crisis",
-            "exchange_risk": "currency_crisis",
-            "fx_risk": "currency_crisis",
-            "operational_risk": "operational_disruption",
-            "cybersecurity_risk": "cyber_security_breach",
-            "regulatory_risk": "regulatory_crackdown",
-            "liquidity_risk": "liquidity_shortage",
-            "systemic_risk": "systemic_banking_crisis",
-            "interest_rate_risk": "interest_rate_shock",
-            "geopolitical_risk": "geopolitical_crisis",
-            "real_estate_risk": "real_estate_crisis",
-            "climate_risk": "esg_climate_risk",
-            "esg_risk": "esg_climate_risk",
-            "inflation_risk": "inflation_crisis",
-            "sovereign_risk": "sovereign_debt_crisis",
-            "supply_chain_risk": "supply_chain_crisis"
-        }
-        
-        for risk in risk_categories:
-            if risk in risk_to_theme_map:
-                theme_id = risk_to_theme_map[risk]
-                return {
-                    "primary_theme": theme_id,
-                    "theme_display_name": FINANCIAL_RISK_THEMES[theme_id]["display_name"],
-                    "confidence": 60,  # Medium confidence for fallback
-                    "matched_keywords": [],
-                    "method": "risk_category_fallback"
+        for theme_id, theme_data in FINANCIAL_RISK_THEMES.items():
+            score = 0
+            matched_keywords = []
+            
+            # Check keyword matches
+            for keyword in theme_data['keywords']:
+                if keyword.lower() in full_text:
+                    score += 1
+                    matched_keywords.append(keyword)
+            
+            # Bonus for risk category alignment
+            if risk_categories:
+                theme_keywords = [k.lower() for k in theme_data['keywords']]
+                for risk_cat in risk_categories:
+                    risk_cat_clean = risk_cat.replace('_', ' ').lower()
+                    if any(risk_word in theme_keywords for risk_word in risk_cat_clean.split()):
+                        score += 2
+            
+            if score > 0:
+                theme_scores[theme_id] = {
+                    'score': score,
+                    'matched_keywords': matched_keywords,
+                    'theme_data': theme_data
                 }
-    
-    # Default fallback - use "Others" category
-    return {
-        "primary_theme": "other_financial_risks",
-        "theme_display_name": "Other Financial Risks", 
-        "confidence": 30,  # Low confidence
-        "method": "default_fallback"
-    }
+        
+        # Select best theme
+        if theme_scores:
+            best_theme_id = max(theme_scores.keys(), key=lambda k: theme_scores[k]['score'])
+            best_score = theme_scores[best_theme_id]
+            
+            # Calculate confidence based on score and keyword density
+            max_possible_score = len(best_score['theme_data']['keywords']) + 2
+            confidence = min(90, int((best_score['score'] / max_possible_score) * 100))
+            
+            return {
+                'primary_theme': best_theme_id,
+                'theme_display_name': best_score['theme_data']['display_name'],
+                'confidence': max(confidence, 40),  # Minimum 40% for keyword matches
+                'matched_keywords': best_score['matched_keywords']
+            }
+        
+        # If no themes match, return default
+        print("⚠️ No theme keywords matched, using default theme")
+        return DEFAULT_THEME.copy()
+        
+    except Exception as e:
+        print(f"❌ Fallback theme classification failed: {e}")
+        return DEFAULT_THEME.copy()
+
 
 def get_theme_statistics(db_path="risk_dashboard.db"):
-    """Get theme distribution from database."""
+    """Get statistics about theme distribution in the database"""
     import sqlite3
-    import json
-    
-    theme_stats = {}
     
     try:
         with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            
+            # Get theme distribution
             cursor = conn.execute("""
-                SELECT headline, content, risk_categories, primary_risk_category
+                SELECT primary_theme, COUNT(*) as count, 
+                       AVG(severity_level) as avg_severity,
+                       AVG(confidence_score) as avg_confidence
                 FROM news_articles 
-                WHERE sentiment_score < 0  -- Only negative news
+                WHERE primary_theme IS NOT NULL
+                GROUP BY primary_theme
+                ORDER BY count DESC
             """)
             
+            theme_stats = []
             for row in cursor.fetchall():
-                headline, content, risk_cats_json, primary_risk = row
-                risk_categories = json.loads(risk_cats_json) if risk_cats_json else []
-                
-                # Classify into theme
-                theme_result = classify_news_theme(headline, content, risk_categories)
-                theme = theme_result["primary_theme"]
-                
-                if theme not in theme_stats:
-                    theme_stats[theme] = {
-                        "count": 0,
-                        "display_name": theme_result["theme_display_name"],
-                        "articles": []
-                    }
-                
-                theme_stats[theme]["count"] += 1
-                theme_stats[theme]["articles"].append({
-                    "headline": headline[:100],
-                    "confidence": theme_result["confidence"]
+                theme_data = FINANCIAL_RISK_THEMES.get(row['primary_theme'], {})
+                theme_stats.append({
+                    'theme_id': row['primary_theme'],
+                    'theme_name': theme_data.get('display_name', row['primary_theme']),
+                    'article_count': row['count'],
+                    'avg_severity': row['avg_severity'],
+                    'avg_confidence': round(row['avg_confidence'], 1) if row['avg_confidence'] else 0
                 })
-        
-        return theme_stats
-        
+            
+            return {
+                'total_themes': len(FINANCIAL_RISK_THEMES),
+                'active_themes': len(theme_stats),
+                'theme_distribution': theme_stats
+            }
+            
     except Exception as e:
-        print(f"Error getting theme statistics: {e}")
-        return {}
+        print(f"❌ Error getting theme statistics: {e}")
+        return {
+            'total_themes': len(FINANCIAL_RISK_THEMES),
+            'active_themes': 0,
+            'theme_distribution': []
+        }
 
-# Example testing and validation
+
 if __name__ == "__main__":
-    # Test LLM-based theme classification
-    test_examples = [
+    # Test theme classification
+    test_cases = [
         {
-            "headline": "Trump announces 60% tariffs on Chinese goods, markets plunge",
-            "content": "President Trump announced sweeping tariffs on Chinese imports, causing massive market selloff and currency volatility across global markets."
+            "headline": "Major Bank Reports $2B Credit Losses from Commercial Real Estate Defaults",
+            "content": "First National Bank announced today that it has incurred $2 billion in credit losses..."
         },
         {
-            "headline": "Fed raises rates 0.75%, bank margins under pressure",
-            "content": "Federal Reserve announces aggressive interest rate hike, threatening bank profitability and loan demand across the financial sector."
+            "headline": "Stock Market Plunges 15% as Tech Selloff Accelerates",
+            "content": "Global stock markets experienced their worst day in decades as a massive selloff..."
         },
         {
-            "headline": "Major European bank hacked, customer data exposed",
-            "content": "Cybersecurity breach compromises millions of banking records, raising concerns about digital infrastructure security in the financial sector."
-        },
-        {
-            "headline": "Turkish lira collapses 40% amid currency crisis fears",
-            "content": "Exchange rate volatility and currency devaluation create massive FX exposure for international banks operating in emerging markets."
-        },
-        {
-            "headline": "Regional bank failure sparks contagion fears",
-            "content": "Silicon Valley Bank collapse triggers systemic concerns about deposit insurance and potential contagion across the banking sector."
+            "headline": "Central Bank Raises Interest Rates by 100 Basis Points in Emergency Meeting",
+            "content": "In an unprecedented move, the Federal Reserve announced an emergency rate hike..."
         }
     ]
     
-    print("🎯 LLM-Based Financial Risk Theme Classification:")
-    print("=" * 70)
+    print("Testing Financial Risk Theme Classification")
+    print("=" * 50)
     
-    for i, example in enumerate(test_examples, 1):
-        print(f"\n📰 Example {i}:")
-        print(f"   Headline: {example['headline']}")
+    for i, test in enumerate(test_cases, 1):
+        print(f"\nTest Case {i}:")
+        print(f"Headline: {test['headline']}")
         
-        try:
-            result = classify_news_theme(example["headline"], example["content"])
-            
-            print(f"   ✅ Primary Theme: {result['theme_display_name']}")
-            print(f"   🎯 Confidence: {result['confidence']}%")
-            print(f"   � Method: {result.get('method', 'unknown')}")
-            
-            if 'reasoning' in result:
-                print(f"   💭 Reasoning: {result['reasoning']}")
-                
-        except Exception as e:
-            print(f"   ❌ Classification failed: {e}")
-    
-    print(f"\n✅ LLM-powered theme classification provides intelligent analysis!")
-    print(f"📊 Total Available Themes: {len(FINANCIAL_RISK_THEMES)}")
-    theme_names = [info['display_name'] for info in FINANCIAL_RISK_THEMES.values()]
-    print(f"🎯 Available Themes: {', '.join(theme_names[:8])}...")  # Show first 8
+        result = classify_news_theme(test['headline'], test['content'])
+        print(f"Theme: {result['theme_display_name']}")
+        print(f"Confidence: {result['confidence']}%")
+        print(f"Keywords: {', '.join(result['matched_keywords'])}")
